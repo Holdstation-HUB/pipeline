@@ -1,4 +1,4 @@
-module pipeline
+module github.com/Holdstation-HUB/pipeline
 
 go 1.22
 
