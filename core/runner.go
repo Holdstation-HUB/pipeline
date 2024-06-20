@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/jsonserializable"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
-	"net/http"
 	"sort"
 	"sync"
 	"time"
@@ -39,25 +37,15 @@ type RunnerInf interface {
 	// ExecuteRun executes a new run in-memory according to a spec and returns the results.
 	// We expect spec.JobID and spec.JobName to be set for logging/prometheus.
 	ExecuteRun(ctx context.Context, spec Spec, vars Vars, l *zap.Logger) (run *Run, trrs TaskRunResults, err error)
-
-	// ExecuteAndInsertFinishedRun executes a new run in-memory according to a spec, persists and saves the results.
-	// It is a combination of ExecuteRun and InsertFinishedRun.
-	// Note that the spec MUST have a DOT graph for this to work.
-	// This will persist the Spec in the DB if it doesn't have an ID.
-	ExecuteAndInsertFinishedRun(ctx context.Context, spec Spec, vars Vars, l *zap.Logger, saveSuccessfulTaskRuns bool) (runID int64, results TaskRunResults, err error)
-
-	OnRunFinished(func(*Run))
-	InitializePipeline(spec Spec) (*Pipeline, error)
 }
 
 type runner struct {
 	services.StateMachine
-	config                 Config
-	runReaperWorker        *commonutils.SleeperTask
-	lggr                   *zap.Logger
-	httpClient             *http.Client
-	unrestrictedHTTPClient *http.Client
-	db                     *gorm.DB
+	config          Config
+	runReaperWorker *commonutils.SleeperTask
+	lggr            *zap.Logger
+	switchingTask   GenerateTask
+	configuringTask ConfigTask
 
 	// test helper
 	runFinished func(*Run)
@@ -66,34 +54,20 @@ type runner struct {
 	wgDone sync.WaitGroup
 }
 
-func NewRunner(cfg Config, lggr *zap.Logger, httpClient, unrestrictedHTTPClient *http.Client, db *gorm.DB) Runner {
+func NewRunner(cfg Config, lggr *zap.Logger, switchingTask GenerateTask, configuringTask ConfigTask) Runner {
 	r := &runner{
-		config:                 cfg,
-		chStop:                 make(chan struct{}),
-		wgDone:                 sync.WaitGroup{},
-		runFinished:            func(*Run) {},
-		lggr:                   lggr.Named("PipelineRunner"),
-		httpClient:             httpClient,
-		unrestrictedHTTPClient: unrestrictedHTTPClient,
-		db:                     db,
+		config:          cfg,
+		chStop:          make(chan struct{}),
+		wgDone:          sync.WaitGroup{},
+		runFinished:     func(*Run) {},
+		lggr:            lggr.Named("PipelineRunner"),
+		switchingTask:   switchingTask,
+		configuringTask: configuringTask,
 	}
 	r.runReaperWorker = commonutils.NewSleeperTask(
 		commonutils.SleeperFuncTask(r.runReaper, "PipelineRunnerReaper"),
 	)
 	return r
-}
-
-// Start starts Runner.
-func (r *runner) Start(context.Context) error {
-	return r.StartOnce("PipelineRunner", func() error {
-		r.wgDone.Add(1)
-		go r.scheduleUnfinishedRuns()
-		if r.config.ReaperInterval() != time.Duration(0) {
-			r.wgDone.Add(1)
-			go r.runReaperLoop()
-		}
-		return nil
-	})
 }
 
 func (r *runner) Close() error {
@@ -106,10 +80,6 @@ func (r *runner) Close() error {
 
 func (r *runner) Name() string {
 	return r.lggr.Name()
-}
-
-func (r *runner) HealthReport() map[string]error {
-	return map[string]error{r.Name(): r.Healthy()}
 }
 
 func (r *runner) destroy() {
@@ -225,7 +195,7 @@ func (r *runner) ExecuteRun(
 }
 
 func (r *runner) InitializePipeline(spec Spec) (pipeline *Pipeline, err error) {
-	pipeline, err = spec.GetOrParsePipeline()
+	pipeline, err = Parse(r.switchingTask, spec.DotDagSource)
 	if err != nil {
 		return
 	}
@@ -233,16 +203,7 @@ func (r *runner) InitializePipeline(spec Spec) (pipeline *Pipeline, err error) {
 	// initialize certain task Params
 	for _, task := range pipeline.Tasks {
 		task.Base().uuid = uuid.New()
-
-		switch task.Type() {
-		case TaskTypeHTTP:
-			task.(*HTTPTask).config = r.config
-			task.(*HTTPTask).httpClient = r.httpClient
-			task.(*HTTPTask).unrestrictedHTTPClient = r.unrestrictedHTTPClient
-		case TaskTypeQueryDB:
-			task.(*QueryDBTask).db = r.db
-		default:
-		}
+		r.configuringTask(task)
 	}
 
 	return pipeline, nil
@@ -453,23 +414,7 @@ func (r *runner) executeTaskRun(ctx context.Context, spec Spec, taskRun *memoryT
 	}
 }
 
-// ExecuteAndInsertFinishedRun executes a run in memory then inserts the finished run/task run records, returning the final result
-func (r *runner) ExecuteAndInsertFinishedRun(ctx context.Context, spec Spec, vars Vars, l *zap.Logger, saveSuccessfulTaskRuns bool) (runID int64, results TaskRunResults, err error) {
-	run, trrs, err := r.ExecuteRun(ctx, spec, vars, l)
-	if err != nil {
-		return 0, trrs, pkgerrors.Wrapf(err, "error executing run for spec ID %v", spec.ID)
-	}
-
-	// don't insert if we exited early
-	if run.FailSilently {
-		return 0, trrs, nil
-	}
-
-	// TODO: maybe insert to db for tracing in feature
-	return run.ID, trrs, nil
-}
-
-func (r *runner) Run(ctx context.Context, run *Run, l *zap.Logger, saveSuccessfulTaskRuns bool, fn func(tx sqlutil.DataSource) error) (incomplete bool, err error) {
+func (r *runner) Run(ctx context.Context, run *Run, l *zap.Logger) (incomplete bool, err error) {
 	pipeline, err := r.InitializePipeline(run.PipelineSpec)
 	if err != nil {
 		return false, err

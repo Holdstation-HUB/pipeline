@@ -60,7 +60,7 @@ func (vars Vars) Get(keypathStr string) (interface{}, error) {
 			}
 			currVal = v[idx]
 
-		// For task query db
+		// For task query Db
 		case []map[string]any:
 			idx, err := strconv.ParseInt(part, 10, 64)
 			if err != nil {

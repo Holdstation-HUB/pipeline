@@ -27,18 +27,7 @@ type Spec struct {
 	JobName string `json:"-"`
 	JobType string `json:"-"`
 
-	Pipeline *Pipeline `json:"-" db:"-"` // This may be nil, or may be populated manually as a cache. There is no locking on this, so be careful
-}
-
-func (s *Spec) GetOrParsePipeline() (*Pipeline, error) {
-	if s.Pipeline != nil {
-		return s.Pipeline, nil
-	}
-	return s.ParsePipeline()
-}
-
-func (s *Spec) ParsePipeline() (*Pipeline, error) {
-	return Parse(s.DotDagSource)
+	Pipeline *Pipeline `json:"-" Db:"-"` // This may be nil, or may be populated manually as a cache. There is no locking on this, so be careful
 }
 
 type Run struct {
@@ -62,7 +51,7 @@ type Run struct {
 	State            RunStatus                         `json:"state"`
 
 	Pending bool
-	// FailSilently is used to signal that a task with the failEarly flag has failed, and we want to not put this in the db
+	// FailSilently is used to signal that a task with the failEarly flag has failed, and we want to not put this in the Db
 	FailSilently bool
 }
 

@@ -214,7 +214,7 @@ func (u *Uint64Param) UnmarshalPipelineParam(val interface{}) error {
 			return errors.Wrapf(ErrBadInput, "cannot cast %v to Uint64Param", v)
 		}
 		*u = Uint64Param(v)
-	case float64: // when decoding from db: JSON numbers are floats
+	case float64: // when decoding from Db: JSON numbers are floats
 		if v < 0 || v > math.MaxUint64 {
 			return errors.Wrapf(ErrBadInput, "cannot cast %v to Uint64Param", v)
 		}
@@ -282,7 +282,7 @@ func (p *MaybeUint64Param) UnmarshalPipelineParam(val interface{}) error {
 			return errors.Wrapf(ErrBadInput, "cannot cast %v to uint64", v)
 		}
 		n = uint64(v)
-	case float64: // when decoding from db: JSON numbers are floats
+	case float64: // when decoding from Db: JSON numbers are floats
 		if v < 0 || v > math.MaxUint64 {
 			return errors.Wrapf(ErrBadInput, "cannot cast %v to uint64", v)
 		}
@@ -361,7 +361,7 @@ func (p *MaybeInt32Param) UnmarshalPipelineParam(val interface{}) error {
 			return errors.Wrap(ErrBadInput, "overflows int32")
 		}
 		n = int32(v)
-	case float64: // when decoding from db: JSON numbers are floats
+	case float64: // when decoding from Db: JSON numbers are floats
 		if v > math.MaxInt32 || v < math.MinInt32 {
 			return errors.Wrap(ErrBadInput, "overflows int32")
 		}
@@ -784,7 +784,7 @@ func (p *MaybeBigIntParam) UnmarshalPipelineParam(val interface{}) error {
 		n = big.NewInt(int64(v))
 	case int64:
 		n = big.NewInt(v)
-	case float64: // when decoding from db: JSON numbers are floats
+	case float64: // when decoding from Db: JSON numbers are floats
 		if v < math.MinInt64 || v > math.MaxUint64 {
 			return errors.Wrapf(ErrBadInput, "cannot cast %v to u/int64", v)
 		}

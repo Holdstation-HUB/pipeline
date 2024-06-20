@@ -11,7 +11,7 @@ type QueryDBTask struct {
 	BaseTask `mapstructure:",squash"`
 	Query    string `json:"query"`
 	Params   string `json:"params"`
-	db       *gorm.DB
+	Db       *gorm.DB
 }
 
 var _ Task = (*QueryDBTask)(nil)
@@ -40,14 +40,14 @@ func (q QueryDBTask) Run(ctx context.Context, _ *zap.Logger, vars Vars, inputs [
 		return Result{Error: err}, RunInfo{}
 	}
 
-	// Convert custom type to []interface{} cause db.Raw only receive param with types []interface{}
+	// Convert custom type to []interface{} cause Db.Raw only receive param with types []interface{}
 	interfaceValues := make([]any, len(stringValues))
 	for i, v := range stringValues {
 		interfaceValues[i] = v
 	}
 
 	var result []map[string]any
-	if err := q.db.WithContext(ctx).
+	if err := q.Db.WithContext(ctx).
 		Raw(q.Query, interfaceValues...).
 		Scan(&result).
 		Error; err != nil {

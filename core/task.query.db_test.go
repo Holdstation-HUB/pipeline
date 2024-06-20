@@ -3,11 +3,20 @@ package core_test
 import (
 	"context"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Holdstation-HUB/pipeline/core"
+	"github.com/Holdstation-HUB/pipeline/test"
 	"github.com/magiconair/properties/assert"
-	"pipeline/core"
-	"pipeline/test"
+	"gorm.io/gorm"
 	"testing"
 )
+
+func CustomConfiguringTask(task core.Task, db *gorm.DB) {
+	switch task.Type() {
+	case core.TaskTypeQueryDB:
+		task.(*core.QueryDBTask).Db = db
+	default:
+	}
+}
 
 func TestQueryDBTaskWithNoParam(t *testing.T) {
 	zapLog := test.NewMockZapLog()
@@ -20,7 +29,9 @@ func TestQueryDBTaskWithNoParam(t *testing.T) {
 	mock.ExpectQuery("^SELECT (.+) FROM users$").
 		WillReturnRows(rows)
 
-	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, nil, nil, db)
+	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, core.DefaultGeneratingTask, func(task core.Task) {
+		CustomConfiguringTask(task, db)
+	})
 
 	specs := core.Spec{
 		DotDagSource: `
@@ -52,7 +63,9 @@ func TestQueryDBTaskWithNoParam(t *testing.T) {
 func TestQueryDBTaskWithFixedParams(t *testing.T) {
 	zapLog := test.NewMockZapLog()
 	db, mock := test.NewMockDB()
-	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, nil, nil, db)
+	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, core.DefaultGeneratingTask, func(task core.Task) {
+		CustomConfiguringTask(task, db)
+	})
 
 	query := `SELECT id, name FROM users WHERE`
 
@@ -120,7 +133,9 @@ func TestQueryDBTaskWithFixedParams(t *testing.T) {
 func TestQueryDBTaskWithPassingParams(t *testing.T) {
 	zapLog := test.NewMockZapLog()
 	db, mock := test.NewMockDB()
-	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, nil, nil, db)
+	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, core.DefaultGeneratingTask, func(task core.Task) {
+		CustomConfiguringTask(task, db)
+	})
 
 	query := `SELECT id, name FROM users WHERE`
 

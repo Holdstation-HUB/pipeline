@@ -3,10 +3,10 @@ package core
 import (
 	"context"
 	"crypto/ecdsa"
+	"github.com/Holdstation-HUB/pipeline/test"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/magiconair/properties/assert"
-	"pipeline/test"
 	"testing"
 )
 
@@ -25,8 +25,7 @@ func TestDecodePrivateKey(t *testing.T) {
 	}
 
 	zapLog := test.NewMockZapLog()
-	db, _ := test.NewMockDB()
-	runner := NewRunner(NewDefaultConfig(), zapLog, nil, nil, db)
+	runner := NewRunner(NewDefaultConfig(), zapLog, DefaultGeneratingTask, DefaultConfiguringTask)
 
 	specs := Spec{
 		DotDagSource: `
