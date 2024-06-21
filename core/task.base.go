@@ -1,11 +1,9 @@
 package core
 
 import (
-	"time"
-
+	"github.com/Holdstation-HUB/pipeline/core/null"
 	"github.com/google/uuid"
-
-	"github.com/smartcontractkit/chainlink/v2/core/null"
+	"time"
 )
 
 type BaseTask struct {

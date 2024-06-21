@@ -2,15 +2,17 @@ package core
 
 import (
 	"context"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
-	commonconfig "github.com/smartcontractkit/chainlink-common/pkg/config"
-	"github.com/smartcontractkit/chainlink-common/pkg/utils/jsonserializable"
+	"fmt"
 	"go.uber.org/zap"
 	"reflect"
 	"sort"
 	"time"
 
 	"github.com/google/uuid"
+	error2 "github.com/pkg/errors"
 	pkgerrors "github.com/pkg/errors"
 	"gopkg.in/guregu/null.v4"
 )
@@ -34,7 +36,7 @@ type (
 	}
 	Config interface {
 		DefaultHTTPLimit() int64
-		DefaultHTTPTimeout() commonconfig.Duration
+		DefaultHTTPTimeout() Duration
 		MaxRunDuration() time.Duration
 		ReaperInterval() time.Duration
 		ReaperThreshold() time.Duration
@@ -55,8 +57,8 @@ func (d DefaultConfig) DefaultHTTPLimit() int64 {
 	return 100
 }
 
-func (d DefaultConfig) DefaultHTTPTimeout() commonconfig.Duration {
-	duration, err := commonconfig.NewDuration(time.Minute)
+func (d DefaultConfig) DefaultHTTPTimeout() Duration {
+	duration, err := NewDuration(time.Minute)
 	if err != nil {
 		panic(err)
 	}
@@ -128,8 +130,8 @@ type Result struct {
 }
 
 // OutputDB dumps a single result output for a pipeline_run or pipeline_task_run
-func (result Result) OutputDB() jsonserializable.JSONSerializable {
-	return jsonserializable.JSONSerializable{Val: result.Value, Valid: !(result.Value == nil || (reflect.ValueOf(result.Value).Kind() == reflect.Ptr && reflect.ValueOf(result.Value).IsNil()))}
+func (result Result) OutputDB() JSONSerializable {
+	return JSONSerializable{Val: result.Value, Valid: !(result.Value == nil || (reflect.ValueOf(result.Value).Kind() == reflect.Ptr && reflect.ValueOf(result.Value).IsNil()))}
 }
 
 // ErrorDB dumps a single result error for a pipeline_task_run
@@ -286,4 +288,161 @@ func CheckInputs(inputs []Result, minLen, maxLen, maxErrors int) ([]interface{},
 		return nil, ErrTooManyErrors
 	}
 	return vals, nil
+}
+
+// Interval represents a time.Duration stored as a Postgres interval type
+type Interval time.Duration
+
+// NewInterval creates Interval for specified duration
+func NewInterval(d time.Duration) *Interval {
+	i := new(Interval)
+	*i = Interval(d)
+	return i
+}
+
+func (i Interval) Duration() time.Duration {
+	return time.Duration(i)
+}
+
+// MarshalText implements the text.Marshaler interface.
+func (i Interval) MarshalText() ([]byte, error) {
+	return []byte(time.Duration(i).String()), nil
+}
+
+// UnmarshalText implements the text.Unmarshaler interface.
+func (i *Interval) UnmarshalText(input []byte) error {
+	v, err := time.ParseDuration(string(input))
+	if err != nil {
+		return err
+	}
+	*i = Interval(v)
+	return nil
+}
+
+func (i *Interval) Scan(v interface{}) error {
+	if v == nil {
+		*i = Interval(time.Duration(0))
+		return nil
+	}
+	asInt64, is := v.(int64)
+	if !is {
+		return error2.Errorf("models.Interval#Scan() wanted int64, got %T", v)
+	}
+	*i = Interval(time.Duration(asInt64) * time.Nanosecond)
+	return nil
+}
+
+func (i Interval) Value() (driver.Value, error) {
+	return time.Duration(i).Nanoseconds(), nil
+}
+
+func (i Interval) IsZero() bool {
+	return time.Duration(i) == time.Duration(0)
+}
+
+// Duration is a non-negative time duration.
+type Duration struct{ d time.Duration }
+
+func NewDuration(d time.Duration) (Duration, error) {
+	if d < time.Duration(0) {
+		return Duration{}, fmt.Errorf("cannot make negative time duration: %s", d)
+	}
+	return Duration{d: d}, nil
+}
+
+func MustNewDuration(d time.Duration) *Duration {
+	rv, err := NewDuration(d)
+	if err != nil {
+		panic(err)
+	}
+	return &rv
+}
+
+func ParseDuration(s string) (Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return Duration{}, err
+	}
+
+	return NewDuration(d)
+}
+
+func (d Duration) Duration() time.Duration {
+	return d.d
+}
+
+// Before returns the time d units before time t
+func (d Duration) Before(t time.Time) time.Time {
+	return t.Add(-d.Duration())
+}
+
+// Shorter returns true if and only if d is shorter than od.
+func (d Duration) Shorter(od Duration) bool { return d.d < od.d }
+
+// IsInstant is true if and only if d is of duration 0
+func (d Duration) IsInstant() bool { return d.d == 0 }
+
+// String returns a string representing the duration in the form "72h3m0.5s".
+// Leading zero units are omitted. As a special case, durations less than one
+// second format use a smaller unit (milli-, micro-, or nanoseconds) to ensure
+// that the leading digit is non-zero. The zero duration formats as 0s.
+func (d Duration) String() string {
+	return d.Duration().String()
+}
+
+// MarshalJSON implements the json.Marshaler interface.
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
+}
+
+// UnmarshalJSON implements the json.Unmarshaler interface.
+func (d *Duration) UnmarshalJSON(input []byte) error {
+	var txt string
+	err := json.Unmarshal(input, &txt)
+	if err != nil {
+		return err
+	}
+	v, err := time.ParseDuration(txt)
+	if err != nil {
+		return err
+	}
+	*d, err = NewDuration(v)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *Duration) Scan(v interface{}) (err error) {
+	switch tv := v.(type) {
+	case int64:
+		*d, err = NewDuration(time.Duration(tv))
+		return err
+	default:
+		return fmt.Errorf(`don't know how to parse "%s" of type %T as a `+
+			`models.Duration`, tv, tv)
+	}
+}
+
+func (d Duration) Value() (driver.Value, error) {
+	return int64(d.d), nil
+}
+
+// MarshalText implements the text.Marshaler interface.
+func (d Duration) MarshalText() ([]byte, error) {
+	return []byte(d.d.String()), nil
+}
+
+// UnmarshalText implements the text.Unmarshaler interface.
+func (d *Duration) UnmarshalText(input []byte) error {
+	v, err := time.ParseDuration(string(input))
+	if err != nil {
+		return err
+	}
+	pd, err := NewDuration(v)
+	if err != nil {
+		return err
+	}
+	*d = pd
+	return nil
 }

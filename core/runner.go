@@ -3,11 +3,12 @@ package core
 import (
 	"context"
 	"fmt"
+	"github.com/Holdstation-HUB/pipeline/core/null"
+	"github.com/Holdstation-HUB/pipeline/core/services"
 	"github.com/mitchellh/mapstructure"
-	"github.com/smartcontractkit/chainlink-common/pkg/utils/jsonserializable"
-	cnull "github.com/smartcontractkit/chainlink/v2/core/null"
 	"go.uber.org/zap"
 	"gonum.org/v1/gonum/graph/topo"
+	nullv4 "gopkg.in/guregu/null.v4"
 	"reflect"
 	"sort"
 	"strconv"
@@ -15,17 +16,10 @@ import (
 	"sync"
 	"time"
 
+	cutils "github.com/Holdstation-HUB/pipeline/core/utils"
 	"github.com/google/uuid"
-	pkgerrors "github.com/pkg/errors"
-	"gopkg.in/guregu/null.v4"
-
-	"github.com/smartcontractkit/chainlink-common/pkg/services"
-	commonutils "github.com/smartcontractkit/chainlink-common/pkg/utils"
-
 	"github.com/pkg/errors"
-	cutils "github.com/smartcontractkit/chainlink-common/pkg/utils"
-	"github.com/smartcontractkit/chainlink/v2/core/config/env"
-	"github.com/smartcontractkit/chainlink/v2/core/store/models"
+	pkgerrors "github.com/pkg/errors"
 )
 
 //go:generate mockery --quiet --name Runner --output ./mocks/ --case=underscore
@@ -37,7 +31,7 @@ var (
 	bytesType      = reflect.TypeOf([]byte(nil))
 	bytes20Type    = reflect.TypeOf([20]byte{})
 	int32Type      = reflect.TypeOf(int32(0))
-	nullUint32Type = reflect.TypeOf(cnull.Uint32{})
+	nullUint32Type = reflect.TypeOf(null.Uint32{})
 )
 
 type TaskType string
@@ -60,7 +54,7 @@ type TaskSetup struct {
 type runner struct {
 	services.StateMachine
 	config          Config
-	runReaperWorker *commonutils.SleeperTask
+	runReaperWorker *cutils.SleeperTask
 	lggr            *zap.Logger
 	taskSetup       map[TaskType]TaskSetup
 
@@ -80,8 +74,8 @@ func NewRunner(cfg Config, lggr *zap.Logger) Runner {
 		lggr:        lggr.Named("PipelineRunner"),
 		taskSetup:   map[TaskType]TaskSetup{},
 	}
-	r.runReaperWorker = commonutils.NewSleeperTask(
-		commonutils.SleeperFuncTask(r.runReaper, "PipelineRunnerReaper"),
+	r.runReaperWorker = cutils.NewSleeperTask(
+		cutils.SleeperFuncTask(r.runReaper, "PipelineRunnerReaper"),
 	)
 	return r
 }
@@ -153,8 +147,8 @@ func NewRun(spec Spec, vars Vars) *Run {
 		PruningKey:     spec.JobID,
 		PipelineSpec:   spec,
 		PipelineSpecID: spec.ID,
-		Inputs:         jsonserializable.JSONSerializable{Val: vars.vars, Valid: true},
-		Outputs:        jsonserializable.JSONSerializable{Val: nil, Valid: false},
+		Inputs:         JSONSerializable{Val: vars.vars, Valid: true},
+		Outputs:        JSONSerializable{Val: nil, Valid: false},
 		CreatedAt:      time.Now(),
 	}
 }
@@ -166,15 +160,15 @@ func (r *runner) OnRunFinished(fn func(*Run)) {
 // github.com/smartcontractkit/libocr/offchainreporting2plus/internal/protocol.ReportingPluginTimeoutWarningGracePeriod
 var overtime = 100 * time.Millisecond
 
-func init() {
-	// undocumented escape hatch
-	if v := env.PipelineOvertime.Get(); v != "" {
-		d, err := time.ParseDuration(v)
-		if err == nil {
-			overtime = d
-		}
-	}
-}
+//func init() {
+//	// undocumented escape hatch
+//	if v := env.PipelineOvertime.Get(); v != "" {
+//		d, err := time.ParseDuration(v)
+//		if err == nil {
+//			overtime = d
+//		}
+//	}
+//}
 
 func (r *runner) ExecuteRun1(
 	ctx context.Context,
@@ -185,7 +179,7 @@ func (r *runner) ExecuteRun1(
 	// Pipeline runs may return results after the context is cancelled, so we modify the
 	// deadline to give them time to return before the parent context deadline.
 	var cancel func()
-	ctx, cancel = commonutils.ContextWithDeadlineFn(ctx, func(orig time.Time) time.Time {
+	ctx, cancel = cutils.ContextWithDeadlineFn(ctx, func(orig time.Time) time.Time {
 		if tenPct := time.Until(orig) / 10; overtime > tenPct {
 			return orig.Add(-tenPct)
 		}
@@ -224,7 +218,7 @@ func (r *runner) ExecuteRun(
 	// Pipeline runs may return results after the context is cancelled, so we modify the
 	// deadline to give them time to return before the parent context deadline.
 	var cancel func()
-	ctx, cancel = commonutils.ContextWithDeadlineFn(ctx, func(orig time.Time) time.Time {
+	ctx, cancel = cutils.ContextWithDeadlineFn(ctx, func(orig time.Time) time.Time {
 		if tenPct := time.Until(orig) / 10; overtime > tenPct {
 			return orig.Add(-tenPct)
 		}
@@ -371,7 +365,7 @@ func (r *runner) unmarshalTaskFromMap(taskType TaskType, taskMap interface{}, ID
 				switch to {
 				case nullUint32Type:
 					i, err2 := strconv.ParseUint(data.(string), 10, 32)
-					return cnull.Uint32From(uint32(i)), err2
+					return null.Uint32From(uint32(i)), err2
 				}
 				return data, nil
 			},
@@ -418,7 +412,7 @@ func (r *runner) run(ctx context.Context, pipeline *Pipeline, run *Run, vars Var
 				ID:         uuid.New(),
 				Task:       taskRun.task,
 				Result:     Result{Error: ErrRunPanicked{err}},
-				FinishedAt: null.TimeFrom(t),
+				FinishedAt: nullv4.TimeFrom(t),
 				CreatedAt:  t, // TODO: more accurate start time
 			})
 		})
@@ -432,7 +426,7 @@ func (r *runner) run(ctx context.Context, pipeline *Pipeline, run *Run, vars Var
 
 	var runTime time.Duration
 	if !scheduler.pending {
-		run.FinishedAt = null.TimeFrom(time.Now())
+		run.FinishedAt = nullv4.TimeFrom(time.Now())
 
 		// NOTE: runTime can be very long now because it'll include suspend
 		runTime = run.FinishedAt.Time.Sub(run.CreatedAt)
@@ -465,8 +459,8 @@ func (r *runner) run(ctx context.Context, pipeline *Pipeline, run *Run, vars Var
 
 	// Update run errors/outputs
 	if run.FinishedAt.Valid {
-		var errors []null.String
-		var fatalErrors []null.String
+		var errors []nullv4.String
+		var fatalErrors []nullv4.String
 		var outputs []interface{}
 		for _, result := range run.PipelineTaskRuns {
 			if result.Error.Valid {
@@ -481,7 +475,7 @@ func (r *runner) run(ctx context.Context, pipeline *Pipeline, run *Run, vars Var
 		}
 		run.AllErrors = errors
 		run.FatalErrors = fatalErrors
-		run.Outputs = jsonserializable.JSONSerializable{Val: outputs, Valid: true}
+		run.Outputs = JSONSerializable{Val: outputs, Valid: true}
 
 		if run.HasFatalErrors() {
 			run.State = RunStatusErrored
@@ -557,7 +551,7 @@ func (r *runner) executeTaskRun(ctx context.Context, spec Spec, taskRun *memoryT
 		ctx, cancel = context.WithTimeout(ctx, taskTimeout)
 		defer cancel()
 	}
-	if spec.MaxTaskDuration != models.Interval(time.Duration(0)) {
+	if spec.MaxTaskDuration != Interval(time.Duration(0)) {
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(spec.MaxTaskDuration))
 		defer cancel()
 	}
@@ -579,9 +573,9 @@ func (r *runner) executeTaskRun(ctx context.Context, spec Spec, taskRun *memoryT
 
 	now := time.Now()
 
-	var finishedAt null.Time
+	var finishedAt nullv4.Time
 	if !runInfo.IsPending {
-		finishedAt = null.TimeFrom(now)
+		finishedAt = nullv4.TimeFrom(now)
 	}
 	return TaskRunResult{
 		ID:         taskRun.task.Base().uuid,

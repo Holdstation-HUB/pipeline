@@ -1,23 +1,20 @@
 package core
 
 import (
-	"encoding/hex"
 	"encoding/json"
+	"github.com/Holdstation-HUB/pipeline/core/hex"
+	"github.com/Holdstation-HUB/pipeline/core/utils"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/pkg/errors"
+	"github.com/shopspring/decimal"
 	"math"
 	"math/big"
 	"net/url"
 	"strconv"
 	"strings"
-
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/pkg/errors"
-	"github.com/shopspring/decimal"
-
-	commonhex "github.com/smartcontractkit/chainlink-common/pkg/utils/hex"
-	"github.com/smartcontractkit/chainlink/v2/core/utils"
 )
 
-//go:Init mockery --quiet --name PipelineParamUnmarshaler --output ./mocks/ --case=underscore
+//go:generate mockery --quiet --name PipelineParamUnmarshaler --output ./mocks/ --case=underscore
 
 type PipelineParamUnmarshaler interface {
 	UnmarshalPipelineParam(val interface{}) error
@@ -144,8 +141,8 @@ func (b *BytesParam) UnmarshalPipelineParam(val interface{}) error {
 	switch v := val.(type) {
 	case string:
 		// first check if this is a valid hex-encoded string
-		if commonhex.HasPrefix(v) {
-			noHexPrefix := commonhex.TrimPrefix(v)
+		if hex.HasPrefix(v) {
+			noHexPrefix := hex.TrimPrefix(v)
 			bs, err := hex.DecodeString(noHexPrefix)
 			if err == nil {
 				*b = bs
@@ -474,7 +471,7 @@ func (a *AddressParam) UnmarshalPipelineParam(val interface{}) error {
 	case []byte:
 		switch len(v) {
 		case 42:
-			bs, err := commonhex.DecodeString(string(v))
+			bs, err := hex.DecodeString(string(v))
 			if err == nil {
 				*a = AddressParam(common.BytesToAddress(bs))
 				return nil

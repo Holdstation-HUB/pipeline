@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/smartcontractkit/chainlink-common/pkg/utils/jsonserializable"
 	"strings"
 	"time"
 
@@ -132,7 +131,7 @@ func JSONWithVarExprs(jsExpr string, vars Vars, allowErrors bool) GetterFunc {
 		if err := jd.Decode(&val); err != nil {
 			return nil, errors.Wrapf(ErrBadInput, "while unmarshalling JSON: %v; js: %s", err, string(replaced))
 		}
-		reinterpreted, err := jsonserializable.ReinterpretJSONNumbers(val)
+		reinterpreted, err := ReinterpretJSONNumbers(val)
 		if err != nil {
 			return nil, errors.Wrapf(ErrBadInput, "while processing json.Number: %v; js: %s", err, string(replaced))
 		}
