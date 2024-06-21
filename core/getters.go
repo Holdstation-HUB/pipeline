@@ -121,7 +121,7 @@ func JSONWithVarExprs(jsExpr string, vars Vars, allowErrors bool) GetterFunc {
 			return nil, ErrParameterEmpty
 		}
 		const chainlinkKeyPath = "__chainlink_key_path__"
-		replaced := variableRegexp.ReplaceAllFunc([]byte(jsExpr), func(expr []byte) []byte {
+		replaced := VariableRegexp.ReplaceAllFunc([]byte(jsExpr), func(expr []byte) []byte {
 			keypathStr := strings.TrimSpace(string(expr[2 : len(expr)-1]))
 			return []byte(fmt.Sprintf(`{ "%s": "%s" }`, chainlinkKeyPath, keypathStr))
 		})

@@ -13,7 +13,7 @@ var (
 	ErrVarsRoot        = errors.New("cannot get/set the root of a pipeline.Vars")
 	ErrVarsSetNested   = errors.New("cannot set a nested key of a pipeline.Vars")
 
-	variableRegexp = regexp.MustCompile(`\$\(\s*([a-zA-Z0-9_\.]+)\s*\)`)
+	VariableRegexp = regexp.MustCompile(`\$\(\s*([a-zA-Z0-9_\.]+)\s*\)`)
 )
 
 type Vars struct {

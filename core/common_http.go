@@ -12,7 +12,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-func makeHTTPRequest(
+func MakeHTTPRequest(
 	ctx context.Context,
 	lggr *zap.Logger,
 	method StringParam,
@@ -61,7 +61,7 @@ func makeHTTPRequest(
 	elapsed := time.Since(start) // TODO: return elapsed from utils/http
 
 	if statusCode >= 400 {
-		maybeErr := bestEffortExtractError(responseBytes)
+		maybeErr := BestEffortExtractError(responseBytes)
 		return nil, statusCode, respHeaders, 0, errors.Errorf("got error from %s: (status code %v) %s", url.String(), statusCode, maybeErr)
 	}
 	return responseBytes, statusCode, respHeaders, elapsed, nil
@@ -72,7 +72,7 @@ type PossibleErrorResponses struct {
 	ErrorMessage string `json:"errorMessage"`
 }
 
-func bestEffortExtractError(responseBytes []byte) string {
+func BestEffortExtractError(responseBytes []byte) string {
 	var resp PossibleErrorResponses
 	err := json.Unmarshal(responseBytes, &resp)
 	if err != nil {
@@ -86,7 +86,7 @@ func bestEffortExtractError(responseBytes []byte) string {
 	return string(responseBytes)
 }
 
-func httpRequestCtx(ctx context.Context, t Task, cfg Config) (requestCtx context.Context, cancel context.CancelFunc) {
+func HttpRequestCtx(ctx context.Context, t Task, cfg Config) (requestCtx context.Context, cancel context.CancelFunc) {
 	// Only set the default timeout if the task timeout is missing; task
 	// timeout if present will have already been set on the context at a higher
 	// level. If task timeout is explicitly set to zero, we must not override

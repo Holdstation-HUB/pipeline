@@ -58,7 +58,7 @@ func (g *Graph) AddImplicitDependenciesAsEdges() {
 		params := make(map[string]bool)
 		// Walk through all attributes and find all Params which this node depends on
 		for _, attr := range graphNode.Attributes() {
-			for _, item := range variableRegexp.FindAll([]byte(attr.Value), -1) {
+			for _, item := range VariableRegexp.FindAll([]byte(attr.Value), -1) {
 				expr := strings.TrimSpace(string(item[2 : len(item)-1]))
 				param := strings.Split(expr, ".")[0]
 				params[param] = true

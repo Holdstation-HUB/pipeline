@@ -37,7 +37,7 @@ func newDefaultTransport() *http.Transport {
 	return t
 }
 
-// HTTPRequest holds the request and config struct for a http request
+// HTTPRequest holds the request and Config struct for a http request
 type HTTPRequest struct {
 	Client  *http.Client
 	Request *http.Request

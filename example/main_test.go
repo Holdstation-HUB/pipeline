@@ -11,11 +11,22 @@
 //	var task core.Task
 //	switch taskType {
 //	case core.TaskTypeHTTP:
-//		task = &core.HTTPTask{BaseTask: core.NewBaseTask(id: ID, dotID: dotID)}
+//		task = &core.HTTPTask{BaseTask: core.NewBaseTask(ID, dotID, nil, nil, 0)}
 //	default:
 //		return nil, pkgerrors.Errorf(`unknown task type: "%v"`, taskType)
 //	}
 //	return task, nil
+//}
+//
+//func DefaultConfiguringTask(task core.Task) {
+//	switch task.Type() {
+//	case core.TaskTypeHTTP:
+//		// todo: config for task http
+//	case core.TaskTypeQueryDB:
+//		// todo: config for task query db
+//		//task.(*QueryDBTask).Db = r.Db
+//	default:
+//	}
 //}
 //
 //func TestSomething(t *testing.T) {

@@ -2,3 +2,4 @@ config.yml
 script/dev-data
 .idea
 main.go
+internal

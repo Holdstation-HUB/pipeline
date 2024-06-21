@@ -84,7 +84,7 @@ func newScheduler(p *Pipeline, run *Run, vars Vars, lggr *zap.Logger) *scheduler
 		resultCh: make(chan TaskRunResult),
 	}
 
-	// if there's results already present on Run, then this is a resumption. Loop over them and fill results table
+	// if there's results already present on execute, then this is a resumption. Loop over them and fill results table
 	s.reconstructResults()
 
 	// immediately schedule all doable tasks
@@ -111,7 +111,7 @@ func newScheduler(p *Pipeline, run *Run, vars Vars, lggr *zap.Logger) *scheduler
 }
 
 func (s *scheduler) reconstructResults() {
-	// if there's results already present on Run, then this is a resumption. Loop over them and fill results table
+	// if there's results already present on execute, then this is a resumption. Loop over them and fill results table
 	for _, r := range s.run.PipelineTaskRuns {
 		task := s.pipeline.ByDotID(r.DotID)
 

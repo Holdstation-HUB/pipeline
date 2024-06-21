@@ -1,10 +1,11 @@
-package core
+package task
 
 import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"github.com/Holdstation-HUB/pipeline/core"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/pkg/errors"
@@ -13,52 +14,54 @@ import (
 	"io"
 )
 
+const TaskTypeDecodePK core.TaskType = "decodepk"
+
 type DecodePKTask struct {
-	BaseTask `mapstructure:",squash"`
-	Key      string `json:"private_key"`
-	Secret   string `json:"secret"`
-	Nonce    string `json:"nonce"`
+	core.BaseTask `mapstructure:",squash"`
+	Key           string `json:"private_key"`
+	Secret        string `json:"secret"`
+	Nonce         string `json:"nonce"`
 }
 
-var _ Task = (*DecodePKTask)(nil)
+var _ core.Task = (*DecodePKTask)(nil)
 
-func (t *DecodePKTask) Type() TaskType {
+func (t *DecodePKTask) Type() core.TaskType {
 	return TaskTypeDecodePK
 }
 
-func (t *DecodePKTask) Run(_ context.Context, _ *zap.Logger, vars Vars, inputs []Result) (Result, RunInfo) {
+func (t *DecodePKTask) Run(_ context.Context, _ *zap.Logger, vars core.Vars, inputs []core.Result) (core.Result, core.RunInfo) {
 	var (
-		secretString     StringParam
-		privateKeyString StringParam
-		nonceString      StringParam
+		secretString     core.StringParam
+		privateKeyString core.StringParam
+		nonceString      core.StringParam
 	)
 	err := multierr.Combine(
-		errors.Wrap(ResolveParam(&privateKeyString, From(VarExpr(t.Key, vars))), "key"),
-		errors.Wrap(ResolveParam(&nonceString, From(VarExpr(t.Nonce, vars), Input(inputs, 0))), "nonce"),
-		errors.Wrap(ResolveParam(&secretString, From(VarExpr(t.Secret, vars), NonemptyString(t.Secret))), "secret"),
+		errors.Wrap(core.ResolveParam(&privateKeyString, core.From(core.VarExpr(t.Key, vars))), "key"),
+		errors.Wrap(core.ResolveParam(&nonceString, core.From(core.VarExpr(t.Nonce, vars), core.Input(inputs, 0))), "nonce"),
+		errors.Wrap(core.ResolveParam(&secretString, core.From(core.VarExpr(t.Secret, vars), core.NonemptyString(t.Secret))), "secret"),
 	)
 	privateKeyBytes, err := hexutil.Decode(privateKeyString.String())
 	if err != nil {
-		return Result{Error: err}, RunInfo{}
+		return core.Result{Error: err}, core.RunInfo{}
 	}
 
 	nonceBytes, err := hexutil.Decode(nonceString.String())
 	if err != nil {
-		return Result{Error: err}, RunInfo{}
+		return core.Result{Error: err}, core.RunInfo{}
 	}
 
 	privateKey, err := AesGcmDecrypt([]byte(secretString.String()), privateKeyBytes, nonceBytes)
 	if err != nil {
-		return Result{Error: err}, RunInfo{}
+		return core.Result{Error: err}, core.RunInfo{}
 	}
 
 	pk, err := crypto.HexToECDSA(*privateKey)
 
 	if err != nil {
-		return Result{Error: err}, RunInfo{}
+		return core.Result{Error: err}, core.RunInfo{}
 	}
 
-	return Result{Value: pk}, RunInfo{}
+	return core.Result{Value: pk}, core.RunInfo{}
 }
 
 // AesGcmDecrypt takes an decryption key, a ciphertext and the corresponding nonce and decrypts it with AES256 in GCM mode.

@@ -1,8 +1,9 @@
-package core
+package task
 
 import (
 	"context"
 	"crypto/ecdsa"
+	"github.com/Holdstation-HUB/pipeline/core"
 	"github.com/Holdstation-HUB/pipeline/test"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -25,9 +26,16 @@ func TestDecodePrivateKey(t *testing.T) {
 	}
 
 	zapLog := test.NewMockZapLog()
-	runner := NewRunner(NewDefaultConfig(), zapLog, DefaultGeneratingTask, DefaultConfiguringTask)
-
-	specs := Spec{
+	runner := core.NewRunner(core.NewDefaultConfig(), zapLog)
+	runner.Register(TaskTypeDecodePK, core.TaskSetup{
+		Init: func(taskType core.TaskType, ID int, dotID string) (core.Task, error) {
+			return &DecodePKTask{BaseTask: core.NewBaseTask(ID, dotID)}, nil
+		},
+		Config: func(task core.Task) {
+			return
+		},
+	})
+	specs := core.Spec{
 		DotDagSource: `
 			private_key_decoded [type="decodepk" key="$(wallet.private_key)" secret="$(wallet.secret)" nonce="$(wallet.nonce)"]
 		`,
@@ -39,7 +47,16 @@ func TestDecodePrivateKey(t *testing.T) {
 			"secret":      passcode,
 		},
 	}
-	_, trrs, err := runner.ExecuteRun(context.TODO(), specs, NewVarsFrom(params), zapLog)
+	_, trrs, err := runner.ExecuteRun(context.TODO(), specs, core.NewVarsFrom(params), zapLog)
+	//execute(func(trs *core.TaskRunResults, err error) {
+	//	finalResult, err := trs.FinalResult(nil).SingularResult()
+	//	if err != nil {
+	//		t.Fatal(err)
+	//	}
+	//	decodedPrivateKey := finalResult.Value.(*ecdsa.PrivateKey)
+	//}).
+	//GetRunner().
+	//executeTaskRun(context.TODO())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package core_test
+package task
 
 import (
 	"context"
@@ -10,11 +10,14 @@ import (
 	"testing"
 )
 
-func CustomConfiguringTask(task core.Task, db *gorm.DB) {
-	switch task.Type() {
-	case core.TaskTypeQueryDB:
-		task.(*core.QueryDBTask).Db = db
-	default:
+var setup = func(db *gorm.DB) core.TaskSetup {
+	return core.TaskSetup{
+		Init: func(taskType core.TaskType, ID int, dotID string) (core.Task, error) {
+			return &QueryDBTask{BaseTask: core.NewBaseTask(ID, dotID)}, nil
+		},
+		Config: func(task core.Task) {
+			task.(*QueryDBTask).Db = db
+		},
 	}
 }
 
@@ -29,10 +32,8 @@ func TestQueryDBTaskWithNoParam(t *testing.T) {
 	mock.ExpectQuery("^SELECT (.+) FROM users$").
 		WillReturnRows(rows)
 
-	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, core.DefaultGeneratingTask, func(task core.Task) {
-		CustomConfiguringTask(task, db)
-	})
-
+	runner := core.NewRunner(core.NewDefaultConfig(), zapLog)
+	runner.Register(TaskTypeQueryDB, setup(db))
 	specs := core.Spec{
 		DotDagSource: `
 			users [type="querydb" query="SELECT * FROM users" params=<[]>]
@@ -63,9 +64,8 @@ func TestQueryDBTaskWithNoParam(t *testing.T) {
 func TestQueryDBTaskWithFixedParams(t *testing.T) {
 	zapLog := test.NewMockZapLog()
 	db, mock := test.NewMockDB()
-	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, core.DefaultGeneratingTask, func(task core.Task) {
-		CustomConfiguringTask(task, db)
-	})
+	runner := core.NewRunner(core.NewDefaultConfig(), zapLog)
+	runner.Register(TaskTypeQueryDB, setup(db))
 
 	query := `SELECT id, name FROM users WHERE`
 
@@ -133,9 +133,8 @@ func TestQueryDBTaskWithFixedParams(t *testing.T) {
 func TestQueryDBTaskWithPassingParams(t *testing.T) {
 	zapLog := test.NewMockZapLog()
 	db, mock := test.NewMockDB()
-	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, core.DefaultGeneratingTask, func(task core.Task) {
-		CustomConfiguringTask(task, db)
-	})
+	runner := core.NewRunner(core.NewDefaultConfig(), zapLog)
+	runner.Register(TaskTypeQueryDB, setup(db))
 
 	query := `SELECT id, name FROM users WHERE`
 

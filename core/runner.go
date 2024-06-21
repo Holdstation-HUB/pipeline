@@ -3,9 +3,15 @@ package core
 import (
 	"context"
 	"fmt"
+	"github.com/mitchellh/mapstructure"
 	"github.com/smartcontractkit/chainlink-common/pkg/utils/jsonserializable"
+	cnull "github.com/smartcontractkit/chainlink/v2/core/null"
 	"go.uber.org/zap"
+	"gonum.org/v1/gonum/graph/topo"
+	"reflect"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,29 +20,41 @@ import (
 	"gopkg.in/guregu/null.v4"
 
 	"github.com/smartcontractkit/chainlink-common/pkg/services"
-	"github.com/smartcontractkit/chainlink-common/pkg/sqlutil"
 	commonutils "github.com/smartcontractkit/chainlink-common/pkg/utils"
 
+	"github.com/pkg/errors"
+	cutils "github.com/smartcontractkit/chainlink-common/pkg/utils"
 	"github.com/smartcontractkit/chainlink/v2/core/config/env"
 	"github.com/smartcontractkit/chainlink/v2/core/store/models"
-	"github.com/smartcontractkit/chainlink/v2/core/utils"
 )
 
 //go:generate mockery --quiet --name Runner --output ./mocks/ --case=underscore
 
 type Runner = *runner
 
-type RunnerInf interface {
-	services.Service
+var (
+	stringType     = reflect.TypeOf("")
+	bytesType      = reflect.TypeOf([]byte(nil))
+	bytes20Type    = reflect.TypeOf([20]byte{})
+	int32Type      = reflect.TypeOf(int32(0))
+	nullUint32Type = reflect.TypeOf(cnull.Uint32{})
+)
 
-	// Run is a blocking call that will execute the run until no further progress can be made.
-	// If `incomplete` is true, the run is only partially complete and is suspended, awaiting to be resumed when more data comes in.
-	// Note that `saveSuccessfulTaskRuns` value is ignored if the run contains async tasks.
-	Run(ctx context.Context, run *Run, l *zap.Logger, saveSuccessfulTaskRuns bool, fn func(tx sqlutil.DataSource) error) (incomplete bool, err error)
+type TaskType string
 
-	// ExecuteRun executes a new run in-memory according to a spec and returns the results.
-	// We expect spec.JobID and spec.JobName to be set for logging/prometheus.
-	ExecuteRun(ctx context.Context, spec Spec, vars Vars, l *zap.Logger) (run *Run, trrs TaskRunResults, err error)
+func (t TaskType) String() string {
+	return string(t)
+}
+
+// InitTask
+type InitTask func(taskType TaskType, ID int, dotID string) (Task, error)
+
+// ConfigTask
+type ConfigTask func(task Task)
+
+type TaskSetup struct {
+	Init   InitTask
+	Config ConfigTask
 }
 
 type runner struct {
@@ -44,8 +62,7 @@ type runner struct {
 	config          Config
 	runReaperWorker *commonutils.SleeperTask
 	lggr            *zap.Logger
-	switchingTask   GenerateTask
-	configuringTask ConfigTask
+	taskSetup       map[TaskType]TaskSetup
 
 	// test helper
 	runFinished func(*Run)
@@ -54,19 +71,23 @@ type runner struct {
 	wgDone sync.WaitGroup
 }
 
-func NewRunner(cfg Config, lggr *zap.Logger, switchingTask GenerateTask, configuringTask ConfigTask) Runner {
+func NewRunner(cfg Config, lggr *zap.Logger) Runner {
 	r := &runner{
-		config:          cfg,
-		chStop:          make(chan struct{}),
-		wgDone:          sync.WaitGroup{},
-		runFinished:     func(*Run) {},
-		lggr:            lggr.Named("PipelineRunner"),
-		switchingTask:   switchingTask,
-		configuringTask: configuringTask,
+		config:      cfg,
+		chStop:      make(chan struct{}),
+		wgDone:      sync.WaitGroup{},
+		runFinished: func(*Run) {},
+		lggr:        lggr.Named("PipelineRunner"),
+		taskSetup:   map[TaskType]TaskSetup{},
 	}
 	r.runReaperWorker = commonutils.NewSleeperTask(
 		commonutils.SleeperFuncTask(r.runReaper, "PipelineRunnerReaper"),
 	)
+	return r
+}
+
+func (r *runner) Register(taskType TaskType, taskSetup TaskSetup) *runner {
+	r.taskSetup[taskType] = taskSetup
 	return r
 }
 
@@ -89,25 +110,25 @@ func (r *runner) destroy() {
 	}
 }
 
-func (r *runner) runReaperLoop() {
-	defer r.wgDone.Done()
-	defer r.destroy()
-	if r.config.ReaperInterval() == 0 {
-		return
-	}
-
-	runReaperTicker := time.NewTicker(utils.WithJitter(r.config.ReaperInterval()))
-	defer runReaperTicker.Stop()
-	for {
-		select {
-		case <-r.chStop:
-			return
-		case <-runReaperTicker.C:
-			r.runReaperWorker.WakeUp()
-			runReaperTicker.Reset(utils.WithJitter(r.config.ReaperInterval()))
-		}
-	}
-}
+//func (r *runner) runReaperLoop() {
+//	defer r.wgDone.Done()
+//	defer r.destroy()
+//	if r.config.ReaperInterval() == 0 {
+//		return
+//	}
+//
+//	runReaperTicker := time.NewTicker(utils.WithJitter(r.config.ReaperInterval()))
+//	defer runReaperTicker.Stop()
+//	for {
+//		select {
+//		case <-r.chStop:
+//			return
+//		case <-runReaperTicker.C:
+//			r.runReaperWorker.WakeUp()
+//			runReaperTicker.Reset(utils.WithJitter(r.config.ReaperInterval()))
+//		}
+//	}
+//}
 
 type memoryTaskRun struct {
 	task     Task
@@ -155,6 +176,45 @@ func init() {
 	}
 }
 
+func (r *runner) ExecuteRun1(
+	ctx context.Context,
+	spec Spec,
+	vars Vars,
+	l *zap.Logger,
+) *Wrapper {
+	// Pipeline runs may return results after the context is cancelled, so we modify the
+	// deadline to give them time to return before the parent context deadline.
+	var cancel func()
+	ctx, cancel = commonutils.ContextWithDeadlineFn(ctx, func(orig time.Time) time.Time {
+		if tenPct := time.Until(orig) / 10; overtime > tenPct {
+			return orig.Add(-tenPct)
+		}
+		return orig.Add(-overtime)
+	})
+	defer cancel()
+
+	var pipeline *Pipeline
+	if spec.Pipeline != nil {
+		// assume if set that it has been pre-initialized
+		pipeline = spec.Pipeline
+	} else {
+		var err error
+		pipeline, err = r.InitializePipeline(spec)
+		if err != nil {
+			return &Wrapper{nil, nil, err, r}
+		}
+	}
+
+	run := NewRun(spec, vars)
+	taskRunResults := r.run(ctx, pipeline, run, vars, l)
+
+	if run.Pending {
+		return &Wrapper{run, nil, fmt.Errorf("unexpected async run for spec ID %v, tried executing via ExecuteRun", spec.ID), r}
+	}
+
+	return &Wrapper{run, &taskRunResults, nil, r}
+}
+
 func (r *runner) ExecuteRun(
 	ctx context.Context,
 	spec Spec,
@@ -195,7 +255,7 @@ func (r *runner) ExecuteRun(
 }
 
 func (r *runner) InitializePipeline(spec Spec) (pipeline *Pipeline, err error) {
-	pipeline, err = Parse(r.switchingTask, spec.DotDagSource)
+	pipeline, err = r.parse(spec.DotDagSource)
 	if err != nil {
 		return
 	}
@@ -203,10 +263,129 @@ func (r *runner) InitializePipeline(spec Spec) (pipeline *Pipeline, err error) {
 	// initialize certain task Params
 	for _, task := range pipeline.Tasks {
 		task.Base().uuid = uuid.New()
-		r.configuringTask(task)
+		setup, ok := r.taskSetup[task.Type()]
+		if !ok {
+			continue
+		}
+		setup.Config(task)
 	}
 
 	return pipeline, nil
+}
+
+func (r *runner) parse(text string) (*Pipeline, error) {
+	if strings.TrimSpace(text) == "" {
+		return nil, errors.New("empty pipeline")
+	}
+	g := NewGraph()
+	err := g.UnmarshalText([]byte(text))
+
+	if err != nil {
+		return nil, err
+	}
+
+	p := &Pipeline{
+		tree:   g,
+		Tasks:  make([]Task, 0, g.Nodes().Len()),
+		Source: text,
+	}
+
+	// toposort all the nodes: dependencies ordered before outputs. This also does cycle checking for us.
+	nodes, err := topo.SortStabilized(g, nil)
+
+	if err != nil {
+		return nil, errors.Wrap(err, "Unable to topologically sort the graph, cycle detected")
+	}
+
+	// we need a temporary mapping of graph.IDs to positional ids after toposort
+	ids := make(map[int64]int)
+
+	// use the new ordering as the id so that we can easily reproduce the original toposort
+	for id, node := range nodes {
+		node, is := node.(*GraphNode)
+		if !is {
+			panic("unreachable")
+		}
+
+		if node.dotID == InputTaskKey {
+			return nil, errors.Errorf("'%v' is a reserved keyword that cannot be used as a task's name", InputTaskKey)
+		}
+
+		task, err := r.unmarshalTaskFromMap(TaskType(node.attrs["type"]), node.attrs, id, node.dotID)
+		if err != nil {
+			return nil, err
+		}
+
+		// re-link the edges
+		for inputs := g.To(node.ID()); inputs.Next(); {
+			isImplicitEdge := g.IsImplicitEdge(inputs.Node().ID(), node.ID())
+			from := p.Tasks[ids[inputs.Node().ID()]]
+
+			from.Base().outputs = append(from.Base().outputs, task)
+			task.Base().inputs = append(task.Base().inputs, TaskDependency{!isImplicitEdge, from})
+		}
+
+		// This is subtle: g.To doesn't return nodes in deterministic order, which would occasionally swap the order
+		// of inputs, therefore we manually sort. We don't need to sort outputs the same way because these appends happen
+		// in p.Task order, which is deterministic via topo.SortStable.
+		sort.Slice(task.Base().inputs, func(i, j int) bool {
+			return task.Base().inputs[i].InputTask.ID() < task.Base().inputs[j].InputTask.ID()
+		})
+
+		p.Tasks = append(p.Tasks, task)
+		ids[node.ID()] = id
+	}
+
+	return p, nil
+}
+
+func (r *runner) unmarshalTaskFromMap(taskType TaskType, taskMap interface{}, ID int, dotID string) (_ Task, err error) {
+	defer cutils.WrapIfError(&err, "UnmarshalTaskFromMap")
+
+	switch taskMap.(type) {
+	default:
+		return nil, pkgerrors.Errorf("UnmarshalTaskFromMap only accepts a map[string]interface{} or a map[string]string. Got %v (%#v) of type %T", taskMap, taskMap, taskMap)
+	case map[string]interface{}, map[string]string:
+	}
+
+	taskType = TaskType(strings.ToLower(string(taskType)))
+	setup, ok := r.taskSetup[taskType]
+	if !ok {
+		return nil, errors.New("unknown task type")
+	}
+
+	task, err := setup.Init(taskType, ID, dotID)
+	if err != nil {
+		return nil, err
+	}
+
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Result:           task,
+		WeaklyTypedInput: true,
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			mapstructure.StringToTimeDurationHookFunc(),
+			func(from reflect.Type, to reflect.Type, data interface{}) (interface{}, error) {
+				if from != stringType {
+					return data, nil
+				}
+				switch to {
+				case nullUint32Type:
+					i, err2 := strconv.ParseUint(data.(string), 10, 32)
+					return cnull.Uint32From(uint32(i)), err2
+				}
+				return data, nil
+			},
+		),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	err = decoder.Decode(taskMap)
+	if err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 func (r *runner) run(ctx context.Context, pipeline *Pipeline, run *Run, vars Vars, l *zap.Logger) TaskRunResults {
@@ -453,25 +632,25 @@ func (r *runner) runReaper() {
 
 // init task: Searches the database for runs stuck in the 'running' state while the node was previously killed.
 // We pick up those runs and resume execution.
-func (r *runner) scheduleUnfinishedRuns() {
-	defer r.wgDone.Done()
-
-	// limit using a createdAt < now() @ start of run to prevent executing new jobs
-	//now := time.Now()
-
-	if r.config.ReaperInterval() > time.Duration(0) {
-		// immediately run reaper so we don't consider runs that are too old
-		r.runReaper()
-	}
-
-	ctx, cancel := r.chStop.NewCtx()
-	defer cancel()
-
-	var wgRunsDone sync.WaitGroup
-
-	wgRunsDone.Wait()
-
-	if ctx.Err() != nil {
-		return
-	}
-}
+//func (r *runner) scheduleUnfinishedRuns() {
+//	defer r.wgDone.Done()
+//
+//	// limit using a createdAt < now() @ start of run to prevent executing new jobs
+//	//now := time.Now()
+//
+//	if r.config.ReaperInterval() > time.Duration(0) {
+//		// immediately run reaper so we don't consider runs that are too old
+//		r.runReaper()
+//	}
+//
+//	ctx, cancel := r.chStop.NewCtx()
+//	defer cancel()
+//
+//	var wgRunsDone sync.WaitGroup
+//
+//	wgRunsDone.Wait()
+//
+//	if ctx.Err() != nil {
+//		return
+//	}
+//}

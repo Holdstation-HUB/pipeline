@@ -32,7 +32,6 @@ type (
 		TaskMinBackoff() time.Duration
 		TaskMaxBackoff() time.Duration
 	}
-
 	Config interface {
 		DefaultHTTPLimit() int64
 		DefaultHTTPTimeout() commonconfig.Duration
@@ -111,7 +110,7 @@ type RunInfo struct {
 	IsPending   bool
 }
 
-func isRetryableHTTPError(statusCode int, err error) bool {
+func IsRetryableHTTPError(statusCode int, err error) bool {
 	if statusCode >= 400 && statusCode < 500 {
 		// Client errors are not likely to succeed by resubmitting the exact same information again
 		return false

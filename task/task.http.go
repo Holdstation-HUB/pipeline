@@ -1,34 +1,36 @@
-package core
+package task
 
 import (
 	"context"
 	"encoding/json"
-	"go.uber.org/zap"
-	"net/http"
-
+	"github.com/Holdstation-HUB/pipeline/core"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/multierr"
+	"go.uber.org/zap"
+	"net/http"
 )
+
+const TaskTypeHTTP core.TaskType = "http"
 
 // Return types:
 //
 //	string
 type HTTPTask struct {
-	BaseTask                       `mapstructure:",squash"`
+	core.BaseTask                  `mapstructure:",squash"`
 	Method                         string
 	URL                            string
 	RequestData                    string `json:"requestData"`
 	AllowUnrestrictedNetworkAccess string
 	Headers                        string
 
-	config                 Config
+	config                 core.Config
 	httpClient             *http.Client
 	unrestrictedHTTPClient *http.Client
 }
 
-var _ Task = (*HTTPTask)(nil)
+var _ core.Task = (*HTTPTask)(nil)
 
 var (
 	promHTTPFetchTime = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -45,44 +47,44 @@ var (
 	)
 )
 
-func (t *HTTPTask) Type() TaskType {
+func (t *HTTPTask) Type() core.TaskType {
 	return TaskTypeHTTP
 }
 
-func (t *HTTPTask) Run(ctx context.Context, lggr *zap.Logger, vars Vars, inputs []Result) (result Result, runInfo RunInfo) {
-	_, err := CheckInputs(inputs, -1, -1, 0)
+func (t *HTTPTask) Run(ctx context.Context, lggr *zap.Logger, vars core.Vars, inputs []core.Result) (result core.Result, runInfo core.RunInfo) {
+	_, err := core.CheckInputs(inputs, -1, -1, 0)
 	if err != nil {
-		return Result{Error: errors.Wrap(err, "task inputs")}, runInfo
+		return core.Result{Error: errors.Wrap(err, "task inputs")}, runInfo
 	}
 
 	var (
-		method                         StringParam
-		url                            URLParam
-		requestData                    MapParam
-		allowUnrestrictedNetworkAccess BoolParam
-		reqHeaders                     StringSliceParam
+		method                         core.StringParam
+		url                            core.URLParam
+		requestData                    core.MapParam
+		allowUnrestrictedNetworkAccess core.BoolParam
+		reqHeaders                     core.StringSliceParam
 	)
 	err = multierr.Combine(
-		errors.Wrap(ResolveParam(&method, From(NonemptyString(t.Method), "GET")), "method"),
-		errors.Wrap(ResolveParam(&url, From(VarExpr(t.URL, vars), NonemptyString(t.URL))), "url"),
-		errors.Wrap(ResolveParam(&requestData, From(VarExpr(t.RequestData, vars), JSONWithVarExprs(t.RequestData, vars, false), nil)), "requestData"),
+		errors.Wrap(core.ResolveParam(&method, core.From(core.NonemptyString(t.Method), "GET")), "method"),
+		errors.Wrap(core.ResolveParam(&url, core.From(core.VarExpr(t.URL, vars), core.NonemptyString(t.URL))), "url"),
+		errors.Wrap(core.ResolveParam(&requestData, core.From(core.VarExpr(t.RequestData, vars), core.JSONWithVarExprs(t.RequestData, vars, false), nil)), "requestData"),
 		// Any hardcoded strings used for URL uses the unrestricted HTTP adapter
 		// Interpolated variable URLs use restricted HTTP adapter by default
 		// You must set allowUnrestrictedNetworkAccess=true on the task to enable variable-interpolated URLs to make restricted network requests
-		errors.Wrap(ResolveParam(&allowUnrestrictedNetworkAccess, From(NonemptyString(t.AllowUnrestrictedNetworkAccess), !variableRegexp.MatchString(t.URL))), "allowUnrestrictedNetworkAccess"),
-		errors.Wrap(ResolveParam(&reqHeaders, From(NonemptyString(t.Headers), "[]")), "reqHeaders"),
+		errors.Wrap(core.ResolveParam(&allowUnrestrictedNetworkAccess, core.From(core.NonemptyString(t.AllowUnrestrictedNetworkAccess), !core.VariableRegexp.MatchString(t.URL))), "allowUnrestrictedNetworkAccess"),
+		errors.Wrap(core.ResolveParam(&reqHeaders, core.From(core.NonemptyString(t.Headers), "[]")), "reqHeaders"),
 	)
 	if err != nil {
-		return Result{Error: err}, runInfo
+		return core.Result{Error: err}, runInfo
 	}
 
 	if len(reqHeaders)%2 != 0 {
-		return Result{Error: errors.Errorf("headers must have an even number of elements")}, runInfo
+		return core.Result{Error: errors.Errorf("headers must have an even number of elements")}, runInfo
 	}
 
 	requestDataJSON, err := json.Marshal(requestData)
 	if err != nil {
-		return Result{Error: err}, runInfo
+		return core.Result{Error: err}, runInfo
 	}
 	lggr.Debug("HTTP task: sending request",
 		zap.String("requestData", string(requestDataJSON)),
@@ -92,7 +94,7 @@ func (t *HTTPTask) Run(ctx context.Context, lggr *zap.Logger, vars Vars, inputs 
 		zap.Any("allowUnrestrictedNetworkAccess", allowUnrestrictedNetworkAccess),
 	)
 
-	requestCtx, cancel := httpRequestCtx(ctx, t, t.config)
+	requestCtx, cancel := core.HttpRequestCtx(ctx, t, t.config)
 	defer cancel()
 
 	var client *http.Client
@@ -101,12 +103,12 @@ func (t *HTTPTask) Run(ctx context.Context, lggr *zap.Logger, vars Vars, inputs 
 	} else {
 		client = t.httpClient
 	}
-	responseBytes, statusCode, respHeaders, elapsed, err := makeHTTPRequest(requestCtx, lggr, method, url, reqHeaders, requestData, client, t.config.DefaultHTTPLimit())
+	responseBytes, statusCode, respHeaders, elapsed, err := core.MakeHTTPRequest(requestCtx, lggr, method, url, reqHeaders, requestData, client, t.config.DefaultHTTPLimit())
 	if err != nil {
-		if errors.Is(errors.Cause(err), ErrDisallowedIP) {
+		if errors.Is(errors.Cause(err), core.ErrDisallowedIP) {
 			err = errors.Wrap(err, `connections to local resources are disabled by default, if you are sure this is safe, you can enable on a per-task basis by setting allowUnrestrictedNetworkAccess="true" in the pipeline task spec, e.g. fetch [type="http" method=GET url="$(decode_cbor.url)" allowUnrestrictedNetworkAccess="true"]`)
 		}
-		return Result{Error: err}, RunInfo{IsRetryable: isRetryableHTTPError(statusCode, err)}
+		return core.Result{Error: err}, core.RunInfo{IsRetryable: core.IsRetryableHTTPError(statusCode, err)}
 	}
 
 	lggr.Debug("HTTP task got response",
@@ -123,5 +125,5 @@ func (t *HTTPTask) Run(ctx context.Context, lggr *zap.Logger, vars Vars, inputs 
 	// If a binary response is required we might consider adding an adapter
 	// flag such as  "BinaryMode: true" which passes through raw binary as the
 	// value instead.
-	return Result{Value: string(responseBytes)}, runInfo
+	return core.Result{Value: string(responseBytes)}, runInfo
 }

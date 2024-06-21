@@ -25,8 +25,8 @@ type BaseTask struct {
 	uuid uuid.UUID
 }
 
-func NewBaseTask(id int, dotID string, inputs []TaskDependency, outputs []Task, index int32) BaseTask {
-	return BaseTask{id: id, dotID: dotID, inputs: inputs, outputs: outputs, Index: index}
+func NewBaseTask(id int, dotID string) BaseTask {
+	return BaseTask{id: id, dotID: dotID}
 }
 
 func (t *BaseTask) Base() *BaseTask {
