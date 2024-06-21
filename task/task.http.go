@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"github.com/Holdstation-HUB/pipeline/core"
 	"github.com/pkg/errors"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 	"net/http"
@@ -31,21 +29,6 @@ type HTTPTask struct {
 }
 
 var _ core.Task = (*HTTPTask)(nil)
-
-var (
-	promHTTPFetchTime = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "pipeline_task_http_fetch_time",
-		Help: "Time taken to fully execute the HTTP request",
-	},
-		[]string{"pipeline_task_spec_id"},
-	)
-	promHTTPResponseBodySize = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "pipeline_task_http_response_body_size",
-		Help: "Size (in bytes) of the HTTP response body",
-	},
-		[]string{"pipeline_task_spec_id"},
-	)
-)
 
 func (t *HTTPTask) Type() core.TaskType {
 	return TaskTypeHTTP
@@ -103,7 +86,7 @@ func (t *HTTPTask) Run(ctx context.Context, lggr *zap.Logger, vars core.Vars, in
 	} else {
 		client = t.httpClient
 	}
-	responseBytes, statusCode, respHeaders, elapsed, err := core.MakeHTTPRequest(requestCtx, lggr, method, url, reqHeaders, requestData, client, t.config.DefaultHTTPLimit())
+	responseBytes, statusCode, respHeaders, _, err := core.MakeHTTPRequest(requestCtx, lggr, method, url, reqHeaders, requestData, client, t.config.DefaultHTTPLimit())
 	if err != nil {
 		if errors.Is(errors.Cause(err), core.ErrDisallowedIP) {
 			err = errors.Wrap(err, `connections to local resources are disabled by default, if you are sure this is safe, you can enable on a per-task basis by setting allowUnrestrictedNetworkAccess="true" in the pipeline task spec, e.g. fetch [type="http" method=GET url="$(decode_cbor.url)" allowUnrestrictedNetworkAccess="true"]`)
@@ -117,9 +100,6 @@ func (t *HTTPTask) Run(ctx context.Context, lggr *zap.Logger, vars core.Vars, in
 		zap.String("url", url.String()),
 		zap.String("dotID", t.DotID()),
 	)
-
-	promHTTPFetchTime.WithLabelValues(t.DotID()).Set(float64(elapsed))
-	promHTTPResponseBodySize.WithLabelValues(t.DotID()).Set(float64(len(responseBytes)))
 
 	// NOTE: We always stringify the response since this is required for all current jobs.
 	// If a binary response is required we might consider adding an adapter
