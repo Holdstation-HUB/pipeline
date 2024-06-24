@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+type RpcStrategy string
+type RpcUrl string
+
+const (
+	Random RpcStrategy = "random"
+	Order  RpcStrategy = "order"
+)
+
 type BaseTask struct {
 	outputs []Task
 	inputs  []TaskDependency
@@ -16,9 +24,12 @@ type BaseTask struct {
 	Timeout   *time.Duration `mapstructure:"timeout"`
 	FailEarly bool           `mapstructure:"failEarly"`
 
-	Retries    null.Uint32   `mapstructure:"retries"`
-	MinBackoff time.Duration `mapstructure:"minBackoff"`
-	MaxBackoff time.Duration `mapstructure:"maxBackoff"`
+	Retries     null.Uint32   `mapstructure:"retries"`
+	MinBackoff  time.Duration `mapstructure:"minBackoff"`
+	MaxBackoff  time.Duration `mapstructure:"maxBackoff"`
+	Rpcs        []string      `mapstructure:"rpcs"`
+	RpcStrategy RpcStrategy   `mapstructure:"rpcStrategy"`
+	PrivateKeys []string      `mapstructure:"privateKeys"`
 
 	uuid uuid.UUID
 }
@@ -74,4 +85,19 @@ func (t BaseTask) TaskMaxBackoff() time.Duration {
 		return t.MaxBackoff
 	}
 	return time.Minute
+}
+
+func (t BaseTask) TaskRpcs() []string {
+	return t.Rpcs
+}
+
+func (t BaseTask) TaskPrivateKeys() []string {
+	return t.PrivateKeys
+}
+
+func (t BaseTask) TaskRpcStrategy() RpcStrategy {
+	if t.RpcStrategy == "" {
+		return Random
+	}
+	return t.RpcStrategy
 }

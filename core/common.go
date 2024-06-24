@@ -33,6 +33,9 @@ type (
 		TaskRetries() uint32
 		TaskMinBackoff() time.Duration
 		TaskMaxBackoff() time.Duration
+		TaskRpcs() []string
+		TaskPrivateKeys() []string
+		TaskRpcStrategy() RpcStrategy
 	}
 	Config interface {
 		DefaultHTTPLimit() int64

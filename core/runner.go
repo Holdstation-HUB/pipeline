@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/Holdstation-HUB/pipeline/core/null"
 	"github.com/Holdstation-HUB/pipeline/core/services"
@@ -27,11 +28,12 @@ import (
 type Runner = *runner
 
 var (
-	stringType     = reflect.TypeOf("")
-	bytesType      = reflect.TypeOf([]byte(nil))
-	bytes20Type    = reflect.TypeOf([20]byte{})
-	int32Type      = reflect.TypeOf(int32(0))
-	nullUint32Type = reflect.TypeOf(null.Uint32{})
+	stringType      = reflect.TypeOf("")
+	bytesType       = reflect.TypeOf([]byte(nil))
+	bytes20Type     = reflect.TypeOf([20]byte{})
+	int32Type       = reflect.TypeOf(int32(0))
+	nullUint32Type  = reflect.TypeOf(null.Uint32{})
+	stringSliceType = reflect.TypeOf([]string(nil))
 )
 
 type TaskType string
@@ -56,7 +58,9 @@ type runner struct {
 	config          Config
 	runReaperWorker *cutils.SleeperTask
 	lggr            *zap.Logger
-	taskSetup       map[TaskType]TaskSetup
+
+	initTask   InitTask
+	configTask ConfigTask
 
 	// test helper
 	runFinished func(*Run)
@@ -65,14 +69,16 @@ type runner struct {
 	wgDone sync.WaitGroup
 }
 
-func NewRunner(cfg Config, lggr *zap.Logger) Runner {
+func NewRunner(cfg Config, lggr *zap.Logger, initTask InitTask, configTask ConfigTask) Runner {
 	r := &runner{
 		config:      cfg,
 		chStop:      make(chan struct{}),
 		wgDone:      sync.WaitGroup{},
 		runFinished: func(*Run) {},
 		lggr:        lggr.Named("PipelineRunner"),
-		taskSetup:   map[TaskType]TaskSetup{},
+		//taskSetup:   map[TaskType]TaskSetup{},
+		initTask:   initTask,
+		configTask: configTask,
 	}
 	r.runReaperWorker = cutils.NewSleeperTask(
 		cutils.SleeperFuncTask(r.runReaper, "PipelineRunnerReaper"),
@@ -80,10 +86,10 @@ func NewRunner(cfg Config, lggr *zap.Logger) Runner {
 	return r
 }
 
-func (r *runner) Register(taskType TaskType, taskSetup TaskSetup) *runner {
-	r.taskSetup[taskType] = taskSetup
-	return r
-}
+//func (r *runner) Register(taskType TaskType, taskSetup TaskSetup) *runner {
+//	r.taskSetup[taskType] = taskSetup
+//	return r
+//}
 
 func (r *runner) Close() error {
 	return r.StopOnce("PipelineRunner", func() error {
@@ -103,26 +109,6 @@ func (r *runner) destroy() {
 		r.lggr.Error(err.Error())
 	}
 }
-
-//func (r *runner) runReaperLoop() {
-//	defer r.wgDone.Done()
-//	defer r.destroy()
-//	if r.config.ReaperInterval() == 0 {
-//		return
-//	}
-//
-//	runReaperTicker := time.NewTicker(utils.WithJitter(r.config.ReaperInterval()))
-//	defer runReaperTicker.Stop()
-//	for {
-//		select {
-//		case <-r.chStop:
-//			return
-//		case <-runReaperTicker.C:
-//			r.runReaperWorker.WakeUp()
-//			runReaperTicker.Reset(utils.WithJitter(r.config.ReaperInterval()))
-//		}
-//	}
-//}
 
 type memoryTaskRun struct {
 	task     Task
@@ -159,16 +145,6 @@ func (r *runner) OnRunFinished(fn func(*Run)) {
 
 // github.com/smartcontractkit/libocr/offchainreporting2plus/internal/protocol.ReportingPluginTimeoutWarningGracePeriod
 var overtime = 100 * time.Millisecond
-
-//func init() {
-//	// undocumented escape hatch
-//	if v := env.PipelineOvertime.Get(); v != "" {
-//		d, err := time.ParseDuration(v)
-//		if err == nil {
-//			overtime = d
-//		}
-//	}
-//}
 
 func (r *runner) ExecuteRun1(
 	ctx context.Context,
@@ -257,11 +233,7 @@ func (r *runner) InitializePipeline(spec Spec) (pipeline *Pipeline, err error) {
 	// initialize certain task Params
 	for _, task := range pipeline.Tasks {
 		task.Base().uuid = uuid.New()
-		setup, ok := r.taskSetup[task.Type()]
-		if !ok {
-			continue
-		}
-		setup.Config(task)
+		r.configTask(task)
 	}
 
 	return pipeline, nil
@@ -343,12 +315,8 @@ func (r *runner) unmarshalTaskFromMap(taskType TaskType, taskMap interface{}, ID
 	}
 
 	taskType = TaskType(strings.ToLower(string(taskType)))
-	setup, ok := r.taskSetup[taskType]
-	if !ok {
-		return nil, errors.New("unknown task type")
-	}
 
-	task, err := setup.Init(taskType, ID, dotID)
+	task, err := r.initTask(taskType, ID, dotID)
 	if err != nil {
 		return nil, err
 	}
@@ -366,6 +334,13 @@ func (r *runner) unmarshalTaskFromMap(taskType TaskType, taskMap interface{}, ID
 				case nullUint32Type:
 					i, err2 := strconv.ParseUint(data.(string), 10, 32)
 					return null.Uint32From(uint32(i)), err2
+				case stringSliceType:
+					var result []string
+					err := json.Unmarshal([]byte(data.(string)), &result)
+					if err != nil {
+						return nil, err
+					}
+					return result, nil
 				}
 				return data, nil
 			},
@@ -623,28 +598,3 @@ func (r *runner) runReaper() {
 	_, cancel := r.chStop.CtxCancel(context.WithTimeout(context.Background(), r.config.ReaperInterval()))
 	defer cancel()
 }
-
-// init task: Searches the database for runs stuck in the 'running' state while the node was previously killed.
-// We pick up those runs and resume execution.
-//func (r *runner) scheduleUnfinishedRuns() {
-//	defer r.wgDone.Done()
-//
-//	// limit using a createdAt < now() @ start of run to prevent executing new jobs
-//	//now := time.Now()
-//
-//	if r.config.ReaperInterval() > time.Duration(0) {
-//		// immediately run reaper so we don't consider runs that are too old
-//		r.runReaper()
-//	}
-//
-//	ctx, cancel := r.chStop.NewCtx()
-//	defer cancel()
-//
-//	var wgRunsDone sync.WaitGroup
-//
-//	wgRunsDone.Wait()
-//
-//	if ctx.Err() != nil {
-//		return
-//	}
-//}

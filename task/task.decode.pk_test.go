@@ -8,8 +8,29 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/magiconair/properties/assert"
+	pkgerrors "github.com/pkg/errors"
 	"testing"
 )
+
+func DefaultInitTask(taskType core.TaskType, ID int, dotID string) (core.Task, error) {
+	var task core.Task
+	switch taskType {
+	case TaskTypeDecodePK:
+		task = &DecodePKTask{BaseTask: core.NewBaseTask(ID, dotID)}
+	default:
+		return nil, pkgerrors.Errorf(`unknown task type: "%v"`, taskType)
+	}
+	return task, nil
+}
+
+func DefaultConfigTask(task core.Task) {
+	switch task.Type() {
+	case TaskTypeDecodePK:
+		// todo: config for task query db
+		//task.(*QueryDBTask).Db = r.Db
+	default:
+	}
+}
 
 var passcode = "e16a05e6aa935e5f3b53483750b80308"
 
@@ -26,18 +47,16 @@ func TestDecodePrivateKey(t *testing.T) {
 	}
 
 	zapLog := test.NewMockZapLog()
-	runner := core.NewRunner(core.NewDefaultConfig(), zapLog)
-	runner.Register(TaskTypeDecodePK, core.TaskSetup{
-		Init: func(taskType core.TaskType, ID int, dotID string) (core.Task, error) {
-			return &DecodePKTask{BaseTask: core.NewBaseTask(ID, dotID)}, nil
-		},
-		Config: func(task core.Task) {
-			return
-		},
-	})
+	runner := core.NewRunner(core.NewDefaultConfig(), zapLog, DefaultInitTask, DefaultConfigTask)
 	specs := core.Spec{
 		DotDagSource: `
-			private_key_decoded [type="decodepk" key="$(wallet.private_key)" secret="$(wallet.secret)" nonce="$(wallet.nonce)"]
+			private_key_decoded [type="decodepk" 
+								key="$(wallet.private_key)" 
+								secret="$(wallet.secret)" 
+								nonce="$(wallet.nonce)" 
+								rpcs=<["aaaa", "bbbb"]> 
+								privateKeys=<["cccc", "dddd"]> 
+								rpcStrategy="test"]
 		`,
 	}
 	params := map[string]interface{}{
